@@ -1,0 +1,14 @@
+name: Keep EZQ License Server Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping license server health
+        run: |
+          curl --fail --silent --show-error --max-time 30 https://ezq-license-server.onrender.com/health
