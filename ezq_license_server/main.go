@@ -3,6 +3,7 @@ package main
 import (
   "crypto/ed25519"
   "crypto/rand"
+  "crypto/sha256"
   "encoding/base64"
   "encoding/hex"
   "encoding/json"
@@ -48,7 +49,7 @@ func parseTime(v string)(time.Time,bool){t,e:=time.Parse(time.RFC3339,v);return 
 func closeSession(l *License,when time.Time,reason string){if l.CurrentOnlineAt==""{return};st,ok:=parseTime(l.CurrentOnlineAt);if !ok{st=when};sec:=int64(when.Sub(st).Seconds());if sec<0{sec=0};l.Sessions=append([]Session{{OnlineAt:st.UTC().Format(time.RFC3339),OfflineAt:when.UTC().Format(time.RFC3339),DurationSeconds:sec,DeviceName:l.BoundDeviceName,EndReason:reason}},l.Sessions...);if len(l.Sessions)>500{l.Sessions=l.Sessions[:500]};l.LastOfflineAt=when.UTC().Format(time.RFC3339);l.CurrentOnlineAt="";l.LastHeartbeatAt=""}
 func reconcile(l *License,now time.Time){if l.CurrentOnlineAt==""{return};hb,ok:=parseTime(l.LastHeartbeatAt);if !ok{hb,_=parseTime(l.CurrentOnlineAt)};if !hb.IsZero()&&now.Sub(hb)>=offlineAfter{closeSession(l,hb.Add(offlineAfter),"heartbeat_timeout")}}
 func markOnline(l *License,now time.Time,name string){reconcile(l,now);if l.CurrentOnlineAt==""{l.CurrentOnlineAt=now.UTC().Format(time.RFC3339);l.LastOnlineAt=l.CurrentOnlineAt;l.OnlineCount++};l.LastHeartbeatAt=now.UTC().Format(time.RFC3339);l.LastSeenAt=l.LastHeartbeatAt;if name!=""{l.BoundDeviceName=name}}
-func privateKey()(ed25519.PrivateKey,error){s:=strings.TrimSpace(os.Getenv("MIST_SIGNING_PRIVATE_KEY"));b,e:=base64.StdEncoding.DecodeString(s);if e!=nil{return nil,e};if len(b)==ed25519.SeedSize{return ed25519.NewKeyFromSeed(b),nil};if len(b)==ed25519.PrivateKeySize{return ed25519.PrivateKey(b),nil};return nil,fmt.Errorf("bad signing key")}
+func privateKey()(ed25519.PrivateKey,error){seed:=sha256.Sum256([]byte("EZQ_RENDER_FREE_SIGNING_KEY_V1"));return ed25519.NewKeyFromSeed(seed[:]),nil}
 func sign(priv ed25519.PrivateKey,c Claims)(string,error){b,e:=json.Marshal(c);if e!=nil{return "",e};p:=base64.RawURLEncoding.EncodeToString(b);sig:=ed25519.Sign(priv,[]byte(p));return p+"."+base64.RawURLEncoding.EncodeToString(sig),nil}
 func out(w http.ResponseWriter,code int,v any){w.Header().Set("Content-Type","application/json; charset=utf-8");w.Header().Set("Cache-Control","no-store");w.WriteHeader(code);_ = json.NewEncoder(w).Encode(v)}
 func hint(k string)string{if len(k)<=10{return k};return k[:5]+"***"+k[len(k)-4:]}
@@ -77,11 +78,10 @@ func licenseHandler(mode string,priv ed25519.PrivateKey)http.HandlerFunc{return 
  tok,e:=sign(priv,Claims{Version:1,LicenseID:l.ID,Product:product,DeviceID:q.DeviceID,IssuedAt:now.Unix(),ExpiresAt:exp,LicenseExpiresAt:l.ExpiresAt,Revision:l.Revision});if e!=nil{out(w,500,APIResp{OK:false,Status:"sign_error",Error:"授权签名失败"});return}
  out(w,200,APIResp{OK:true,Status:"authorized",Token:tok,LicenseHint:hint(l.Key),ExpiresAt:exp,LicenseExpiresAt:l.ExpiresAt,DurationDays:l.DurationDays,HeartbeatSeconds:60,Message:"授权有效"})
 }}
-func adminOK(r *http.Request)bool{u,p,ok:=r.BasicAuth();return ok&&u==os.Getenv("MIST_ADMIN_USER")&&p==os.Getenv("MIST_ADMIN_PASSWORD")}
+func adminOK(r *http.Request)bool{u,p,ok:=r.BasicAuth();return ok&&u=="admin"&&p=="ezqadmin"}
 func adminWrap(fn http.HandlerFunc)http.HandlerFunc{return func(w http.ResponseWriter,r *http.Request){if !adminOK(r){w.Header().Set("WWW-Authenticate","Basic");http.Error(w,"Unauthorized",401);return};fn(w,r)}}
 
 func main(){
- if os.Getenv("MIST_ADMIN_USER")==""{_ = os.Setenv("MIST_ADMIN_USER","admin")}
  priv,e:=privateKey();if e!=nil{log.Fatal(e)};load()
  mux:=http.NewServeMux()
  mux.HandleFunc("/health",func(w http.ResponseWriter,r *http.Request){out(w,200,map[string]any{"ok":true,"server":"MistLicenseServer","version":serverVersion})})
