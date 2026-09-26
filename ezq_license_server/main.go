@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net"
@@ -24,17 +25,25 @@ func jsonOut(w http.ResponseWriter, code int, v any) {
 func probeUpstream(target *url.URL, transport *http.Transport) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(target.String(), "/")+"/health", nil)
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		strings.TrimRight(target.String(), "/")+"/health",
+		nil,
+	)
 	if err != nil {
 		log.Printf("upstream startup probe build failed: %v", err)
 		return
 	}
+
 	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
 		log.Printf("upstream startup probe failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
+
 	log.Printf("upstream startup probe success: status=%d host=%s", resp.StatusCode, target.Host)
 }
 
@@ -43,6 +52,7 @@ func main() {
 	if raw == "" {
 		raw = defaultUpstream
 	}
+
 	target, err := url.Parse(strings.TrimRight(raw, "/"))
 	if err != nil || target.Scheme != "https" || target.Host == "" {
 		log.Fatalf("invalid UPSTREAM_URL: %q", raw)
@@ -63,14 +73,18 @@ func main() {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 
-	go probeUpstream(target, transport)\n\n\tproxy := httputil.NewSingleHostReverseProxy(target)
+	go probeUpstream(target, transport)
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport
+
 	origDirector := proxy.Director
 	proxy.Director = func(r *http.Request) {
 		origDirector(r)
 		r.Host = target.Host
 		r.Header.Set("X-EZQ-Gateway", "render-d1-v1")
 	}
+
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
 		log.Printf("proxy error %s %s: %v", r.Method, r.URL.Path, e)
 		jsonOut(w, http.StatusBadGateway, map[string]any{
@@ -95,6 +109,7 @@ func main() {
 	if port == "" {
 		port = "10000"
 	}
+
 	log.Printf("EZQ Render D1 gateway listening on :%s -> %s", port, target.String())
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
