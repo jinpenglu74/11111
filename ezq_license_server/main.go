@@ -21,6 +21,23 @@ func jsonOut(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func probeUpstream(target *url.URL, transport *http.Transport) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(target.String(), "/")+"/health", nil)
+	if err != nil {
+		log.Printf("upstream startup probe build failed: %v", err)
+		return
+	}
+	resp, err := (&http.Client{Transport: transport}).Do(req)
+	if err != nil {
+		log.Printf("upstream startup probe failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	log.Printf("upstream startup probe success: status=%d host=%s", resp.StatusCode, target.Host)
+}
+
 func main() {
 	raw := strings.TrimSpace(os.Getenv("UPSTREAM_URL"))
 	if raw == "" {
@@ -46,7 +63,7 @@ func main() {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	go probeUpstream(target, transport)\n\n\tproxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport
 	origDirector := proxy.Director
 	proxy.Director = func(r *http.Request) {
