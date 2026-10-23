@@ -22,22 +22,19 @@ jobs:
           ref: rewrite-dubbing-v2-source
           fetch-depth: 0
 
-      - name: Import frozen Multi-AI Chat v1.9.6 into our source branch
+      - name: Import frozen Multi-AI Chat v1.9.6 into RewriteDubbingV2
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Copy-Item .github/workflows/rewrite_dubbing_v2_baseline.yml "$env:RUNNER_TEMP\baseline.yml"
           git clone --depth 1 --branch v1.9.6 https://github.com/TED-H-com/multi-ai-chat-desktop.git "$env:RUNNER_TEMP\upstream"
-          git rm -r -f . --ignore-unmatch
-          Get-ChildItem -Force | Where-Object { $_.Name -ne '.git' } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Get-ChildItem "$env:RUNNER_TEMP\upstream" -Force | Where-Object { $_.Name -ne '.git' } | Copy-Item -Destination . -Recurse -Force
-          New-Item -ItemType Directory -Force .github/workflows | Out-Null
-          Copy-Item "$env:RUNNER_TEMP\baseline.yml" .github/workflows/rewrite_dubbing_v2_baseline.yml -Force
+          if (Test-Path RewriteDubbingV2) { Remove-Item RewriteDubbingV2 -Recurse -Force }
+          New-Item -ItemType Directory -Force RewriteDubbingV2 | Out-Null
+          Get-ChildItem "$env:RUNNER_TEMP\upstream" -Force | Where-Object { $_.Name -ne '.git' } | Copy-Item -Destination RewriteDubbingV2 -Recurse -Force
           git config user.name "RewriteDubbing Build"
           git config user.email "actions@users.noreply.github.com"
-          git add -A
+          git add RewriteDubbingV2
           if (-not (git diff --cached --quiet)) {
-            git commit -m "Import Multi-AI Chat v1.9.6 as RewriteDubbing V2 baseline [skip ci]"
+            git commit -m "Import Multi-AI Chat v1.9.6 into RewriteDubbingV2 source [skip ci]"
             git push origin HEAD:rewrite-dubbing-v2-source
           }
 
@@ -56,25 +53,29 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
+        working-directory: RewriteDubbingV2
         run: pnpm install --frozen-lockfile
 
       - name: Verify original baseline
+        working-directory: RewriteDubbingV2
         run: pnpm verify
 
       - name: Rust tests
+        working-directory: RewriteDubbingV2
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Build NSIS installer
+        working-directory: RewriteDubbingV2
         run: pnpm tauri build --bundles nsis
 
       - name: Prepare baseline deliverables
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force deliverables | Out-Null
-          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
+          $exe = Get-ChildItem RewriteDubbingV2/src-tauri/target/release/bundle/nsis -Filter *.exe | Select-Object -First 1
           if (-not $exe) { throw "NSIS installer not found" }
           Copy-Item $exe.FullName deliverables/MultiAI_v1.9.6_Baseline_Setup.exe
-          git archive --format=zip --output=deliverables/RewriteDubbing_V2_Baseline_Source.zip HEAD
+          Compress-Archive -Path RewriteDubbingV2/* -DestinationPath deliverables/RewriteDubbing_V2_Baseline_Source.zip -Force
           Get-FileHash deliverables/* -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)" } | Set-Content deliverables/SHA256.txt -Encoding ascii
 
       - name: Upload baseline artifacts
