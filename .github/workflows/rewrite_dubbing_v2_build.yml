@@ -20,14 +20,16 @@ jobs:
         with:
           ref: rewrite-dubbing-v2-build
 
-      - name: Reconstruct V2 patch bundle
+      - name: Verify and unpack V2 patch bundle
         shell: pwsh
         run: |
-          $parts = Get-ChildItem rewrite-v2/ci-bundle.b64.part* | Sort-Object Name
-          if ($parts.Count -lt 1) { throw "V2 patch bundle parts are missing" }
-          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
-          [IO.File]::WriteAllBytes("$pwd\rewrite-v2\ci-bundle.zip", [Convert]::FromBase64String(($b64 -replace "\s","")))
-          Expand-Archive "$pwd\rewrite-v2\ci-bundle.zip" "$pwd\rewrite-v2\bundle" -Force
+          $zip = "$pwd\rewrite-v2\ci-bundle-current.zip"
+          if (-not (Test-Path $zip)) { throw "V2 patch bundle is missing" }
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne "74d969ce6082acc6ca76015e522e6dbcd83b63d049df197f64ddcd81a6d3af93") {
+            throw "V2 patch bundle SHA256 mismatch: $hash"
+          }
+          Expand-Archive $zip "$pwd\rewrite-v2\bundle" -Force
           python rewrite-v2/bundle/ai-core-patch/tests/run_v2_contract_tests.py rewrite-v2/bundle/ai-core-patch
 
       - name: Clone frozen Multi-AI Chat v1.9.6
