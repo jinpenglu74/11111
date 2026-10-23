@@ -1,0 +1,386 @@
+name: RewriteDubbing V2 Windows Acceptance
+
+on:
+  push:
+    branches:
+      - rewrite-dubbing-v2-build
+    paths:
+      - 'rewrite-v2/**'
+      - '.github/workflows/rewrite-dubbing-v2-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-accept:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      V2_VERSION: 2.0.0
+      UPSTREAM_TAG: v1.9.6
+      CI_BUNDLE_SHA256: 58228916f1633ced0e973f1b8560dbe8cfcea655ad0905ce9e56421704c8c529
+
+    steps:
+      - name: Checkout temporary build branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Reconstruct and verify V2 patch bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $encoded = (1..5 | ForEach-Object { (Get-Content -Raw "rewrite-v2/ci-bundle.b64.part$_").Trim() }) -join ''
+          [IO.File]::WriteAllBytes("ci-bundle.zip", [Convert]::FromBase64String($encoded))
+          $actual = (Get-FileHash "ci-bundle.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:CI_BUNDLE_SHA256) {
+            throw "CI bundle SHA256 mismatch: $actual"
+          }
+          New-Item -ItemType Directory -Force ci-bundle | Out-Null
+          Expand-Archive -Path ci-bundle.zip -DestinationPath ci-bundle -Force
+          Write-Host "CI_BUNDLE_OK $actual"
+
+      - name: Setup Java 22
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '22'
+          cache: maven
+
+      - name: Clone mature upstreams
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force work | Out-Null
+          git clone --depth 1 --branch $env:UPSTREAM_TAG https://github.com/TED-H-com/multi-ai-chat-desktop.git work/multi-ai-chat
+          git clone --depth 1 https://github.com/jinpenglu74/VeloVoice.git work/VeloVoice
+
+      - name: Apply RewriteDubbing V2 core patches
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python ci-bundle/ai-core-patch/apply_v2_core_patch.py work/multi-ai-chat
+          python ci-bundle/ai-core-patch/apply_v2_regression_patch.py work/multi-ai-chat
+          node ci-bundle/ai-core-patch/tests/pipeline-behavior.test.mjs
+
+      - name: Patch VeloVoice only at the V2 automation boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          root = Path("work/VeloVoice")
+          main = root / "src/main/java/mai_onsyn/VeloVoice/FrameFactory/MainFactory.java"
+          text = main.read_text(encoding="utf-8")
+          anchor = "    static final AXTextArea textArea = new AXTextArea();"
+          if "automationItem" not in text:
+              if anchor not in text:
+                  raise SystemExit("MainFactory automation field anchor missing")
+              text = text.replace(
+                  anchor,
+                  anchor + "\n    private static AXDataTreeItem<SimpleStringProperty> automationItem;",
+                  1,
+              )
+
+          if "prepareAutomationText(" not in text:
+              methods = r'''
+              /**
+               * RewriteDubbing V2 handoff: keep all user VeloVoice settings untouched,
+               * maintain one dedicated visible text item, clear it, then write exact final text.
+               */
+              public static AXTreeItem prepareAutomationText(String fileName, String text) {
+                  if (!Platform.isFxApplicationThread()) throw new IllegalStateException("prepareAutomationText must run on JavaFX thread");
+                  String safeName = (fileName == null || fileName.isBlank()) ? "RewriteDubbing" : fileName;
+                  String value = text == null ? "" : text;
+                  if (automationItem == null || automationItem.getParentItem() == null) {
+                      automationItem = treeView.createFileItem(safeName, new SimpleStringProperty(""));
+                      treeView.add(treeView.getRoot(), automationItem);
+                  } else {
+                      automationItem.rename(safeName);
+                  }
+                  treeView.getGroup().selectButton(automationItem.getButton());
+                  if (automationItem.getData() instanceof SimpleStringProperty property) {
+                      property.set("");
+                      textArea.setText("");
+                      property.set(value);
+                      textArea.setText(value);
+                  }
+                  treeView.update();
+                  return automationItem;
+              }
+
+              public static String getAutomationEditorText() {
+                  if (!Platform.isFxApplicationThread()) throw new IllegalStateException("getAutomationEditorText must run on JavaFX thread");
+                  return textArea.getText() == null ? "" : textArea.getText();
+              }
+
+              public static AXTreeItem getAutomationItem() {
+                  return automationItem;
+              }
+
+              public static File getConfiguredAudioSaveFolder() {
+                  return new File(config.getString("AudioSaveFolder"));
+              }
+          '''
+              idx = text.rfind("}")
+              if idx < 0:
+                  raise SystemExit("MainFactory final brace missing")
+              text = text[:idx] + methods + "\n}\n"
+          main.write_text(text, encoding="utf-8", newline="\n")
+
+          src = Path("ci-bundle/v2-sidecar-src/RewriteDubbingV2")
+          dest = root / "src/main/java/mai_onsyn/RewriteDubbingV2"
+          if dest.exists():
+              shutil.rmtree(dest)
+          shutil.copytree(src, dest)
+
+          # V2 text verification is strict except for CRLF/LF canonicalization.
+          automation = dest / "velo/VeloVoiceAutomation.java"
+          source = automation.read_text(encoding="utf-8")
+          old = r'''    static String normalize(String s) { return s == null ? "" : s.replace("\r\n", "\n").replace('\r', '\n').replace('\u00a0', ' ').trim(); }'''
+          new = r'''    static String normalize(String s) { return s == null ? "" : s.replace("\r\n", "\n").replace('\r', '\n'); }'''
+          if old not in source:
+              raise SystemExit("VeloVoice strict text verification anchor missing")
+          automation.write_text(source.replace(old, new, 1), encoding="utf-8", newline="\n")
+          print("VELOVOICE_V2_PATCH_OK")
+          PY
+
+      - name: Build isolated VeloVoice V2 sidecar
+        shell: pwsh
+        working-directory: work/VeloVoice
+        run: |
+          $ErrorActionPreference = 'Stop'
+          mvn -B -DskipTests package assembly:single
+          $jar = Get-ChildItem target -File -Filter "*release.jar" | Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $jar) {
+            $jar = Get-ChildItem target -File -Filter "*.jar" | Sort-Object Length -Descending | Select-Object -First 1
+          }
+          if (-not $jar) { throw "VeloVoice fat JAR not produced" }
+          Write-Host "VELOVOICE_JAR=$($jar.FullName)"
+          & "$env:JAVA_HOME\bin\java.exe" -cp $jar.FullName mai_onsyn.RewriteDubbingV2.velo.VeloVoiceProtocolSelfTest
+          New-Item -ItemType Directory -Force ..\multi-ai-chat\v2-resources | Out-Null
+          Copy-Item $jar.FullName ..\multi-ai-chat\v2-resources\RewriteDubbing-V2-VeloVoice-Sidecar.jar -Force
+          New-Item -ItemType Directory -Force ..\..\ci-bundle\v2-sidecar | Out-Null
+          Copy-Item $jar.FullName ..\..\ci-bundle\v2-sidecar\RewriteDubbing-V2-VeloVoice-Sidecar.jar -Force
+
+      - name: Run V2 local contracts against the rebuilt sidecar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python ci-bundle/ai-core-patch/tests/run_v2_contract_tests.py
+
+      - name: Build dedicated Java runtime and native dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $resource = Resolve-Path "work/multi-ai-chat/v2-resources"
+          $runtime = Join-Path $resource "Runtime"
+          if (Test-Path $runtime) { Remove-Item $runtime -Recurse -Force }
+          $modules = "java.base,java.datatransfer,java.desktop,java.logging,java.management,java.naming,java.net.http,java.prefs,java.sql,java.xml,jdk.charsets,jdk.crypto.ec,jdk.unsupported"
+          & "$env:JAVA_HOME\bin\jlink.exe" --add-modules $modules --strip-debug --no-man-pages --no-header-files --compress=2 --output $runtime
+          if (-not (Test-Path "$runtime\bin\java.exe")) { throw "jlink runtime missing java.exe" }
+
+          $deps = Join-Path $resource "Dependencies"
+          New-Item -ItemType Directory -Force $deps | Out-Null
+          Copy-Item "work/VeloVoice/lib/jacob-1.21/jacob-1.21-x64.dll" "$deps/jacob-1.21-x64.dll" -Force
+          if (-not (Test-Path "$deps/jacob-1.21-x64.dll")) { throw "JACOB x64 DLL missing" }
+          & "$runtime\bin\java.exe" -version
+
+      - name: Smoke-test packaged VeloVoice UI bridge with dedicated runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, queue, socket, subprocess, tempfile, threading, time
+          from pathlib import Path
+
+          root = Path("work/multi-ai-chat/v2-resources").resolve()
+          java = root / "Runtime/bin/java.exe"
+          jar = root / "RewriteDubbing-V2-VeloVoice-Sidecar.jar"
+          deps = root / "Dependencies"
+          work = Path(tempfile.mkdtemp(prefix="rewrite-v2-velo-smoke-"))
+          token = "acceptance-" + ("7" * 48)
+          env = os.environ.copy()
+          env["REWRITE_VELOVOICE_TOKEN"] = token
+          env["REWRITE_VELOVOICE_PORT"] = "0"
+          proc = subprocess.Popen(
+              [str(java), f"-Djava.library.path={deps}", "-cp", str(jar),
+               "mai_onsyn.RewriteDubbingV2.velo.VeloVoiceSidecarLauncher"],
+              cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+              text=True, encoding="utf-8", errors="replace"
+          )
+          q = queue.Queue()
+          threading.Thread(target=lambda: q.put(proc.stdout.readline()), daemon=True).start()
+          try:
+              line = q.get(timeout=35).strip()
+              if not line.startswith("VELOVOICE_BRIDGE_READY "):
+                  err = proc.stderr.read() if proc.poll() is not None else ""
+                  raise SystemExit(f"sidecar did not become ready: {line!r} {err}")
+              port = int(line.split()[-1])
+              with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+                  s.sendall((json.dumps({"token": token, "action": "ping"}) + "\n").encode())
+                  reply = b""
+                  while not reply.endswith(b"\n"):
+                      reply += s.recv(4096)
+              data = json.loads(reply)
+              if data.get("ok") is not True or data.get("service") != "VeloVoice":
+                  raise SystemExit(f"invalid VeloVoice ping: {data}")
+              print("VELOVOICE_LIVE_BRIDGE_SMOKE_PASS", port)
+          finally:
+              proc.terminate()
+              try:
+                  proc.wait(timeout=8)
+              except subprocess.TimeoutExpired:
+                  proc.kill()
+          PY
+
+      - name: Export complete patched source before dependency install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "artifacts/source/RewriteDubbing_V2.0.0_Source"
+          New-Item -ItemType Directory -Force $out | Out-Null
+
+          robocopy "work/multi-ai-chat" "$out/app" /E /XD ".git" "node_modules" "target" "dist" "Runtime" /XF "RewriteDubbing-V2-VeloVoice-Sidecar.jar" | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy app source failed: $LASTEXITCODE" }
+          robocopy "work/VeloVoice" "$out/third_party/VeloVoice" /E /XD ".git" "target" | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy VeloVoice source failed: $LASTEXITCODE" }
+          robocopy "ci-bundle/ai-core-patch" "$out/build/ai-core-patch" /E /XD "__pycache__" | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy patch source failed: $LASTEXITCODE" }
+          robocopy "ci-bundle/v2-sidecar-src" "$out/build/v2-sidecar-src" /E | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy sidecar source failed: $LASTEXITCODE" }
+
+          @"
+          RewriteDubbing V2.0.0 source baseline
+          - AI core: Multi-AI Chat Desktop v1.9.6 (MIT)
+          - VeloVoice: Mai-Onsyn/VeloVoice derived source
+          - Fixed workflow: DeepSeek -> ChatGPT -> DeepSeek -> VeloVoice
+          - The rewrite workflow reuses the currently selected embedded provider conversations and never calls provider_new_session.
+          "@ | Set-Content "$out/BUILD-V2.txt" -Encoding UTF8
+
+          Compress-Archive -Path "$out/*" -DestinationPath "artifacts/RewriteDubbing_V2.0.0_Source.zip" -CompressionLevel Optimal -Force
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.0
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri dependencies
+        shell: pwsh
+        working-directory: work/multi-ai-chat
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pnpm install --frozen-lockfile
+
+      - name: Official upstream verify plus V2 tests
+        shell: pwsh
+        working-directory: work/multi-ai-chat
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pnpm verify
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build Windows NSIS
+        shell: pwsh
+        working-directory: work/multi-ai-chat
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pnpm tauri build --bundles nsis
+
+      - name: Build V2 portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $portable = "artifacts/portable/RewriteDubbing_V2.0.0_Windows_x64"
+          New-Item -ItemType Directory -Force $portable | Out-Null
+          $exe = "work/multi-ai-chat/src-tauri/target/release/rewrite-dubbing-v2.exe"
+          if (-not (Test-Path $exe)) { throw "Raw V2 executable missing: $exe" }
+          Copy-Item $exe "$portable/RewriteDubbing.exe" -Force
+          Copy-Item "work/multi-ai-chat/v2-resources/*" $portable -Recurse -Force
+          New-Item -ItemType File -Path "$portable/PORTABLE" -Force | Out-Null
+          "Windows 10/11 x64. WebView2 is required." | Set-Content "$portable/README-portable.txt" -Encoding UTF8
+          Compress-Archive -Path "$portable/*" -DestinationPath "artifacts/RewriteDubbing_V2.0.0_Windows_x64_Portable.zip" -CompressionLevel Optimal -Force
+
+      - name: Install generated NSIS and verify installed payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem "work/multi-ai-chat/src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File | Select-Object -First 1
+          if (-not $setup) { throw "NSIS setup not found" }
+          $install = Join-Path $env:RUNNER_TEMP "RewriteDubbingV2Install"
+          if (Test-Path $install) { Remove-Item $install -Recurse -Force }
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList "/S", "/D=$install" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "NSIS silent install failed: $($p.ExitCode)" }
+
+          $mainExe = Get-ChildItem $install -Recurse -Filter "*.exe" -File |
+            Where-Object { $_.Name -notmatch 'uninstall|unins|javaw?|webview' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+          $java = Get-ChildItem $install -Recurse -Filter "java.exe" -File | Select-Object -First 1
+          $sidecar = Get-ChildItem $install -Recurse -Filter "RewriteDubbing-V2-VeloVoice-Sidecar.jar" -File | Select-Object -First 1
+          $jacob = Get-ChildItem $install -Recurse -Filter "jacob-1.21-x64.dll" -File | Select-Object -First 1
+
+          if (-not $mainExe) { throw "Installed main executable missing" }
+          if (-not $java) { throw "Installed Java runtime missing" }
+          if (-not $sidecar) { throw "Installed VeloVoice sidecar missing" }
+          if (-not $jacob) { throw "Installed JACOB dependency missing" }
+
+          & $java.FullName -cp $sidecar.FullName mai_onsyn.RewriteDubbingV2.velo.VeloVoiceProtocolSelfTest
+
+          $app = Start-Process -FilePath $mainExe.FullName -PassThru
+          Start-Sleep -Seconds 12
+          if ($app.HasExited) { throw "Installed app exited during launch smoke test with code $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+          Write-Host "INSTALLED_APP_LAUNCH_SMOKE_PASS $($mainExe.FullName)"
+
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item $setup.FullName "artifacts/RewriteDubbing_V2.0.0_Windows_x64_Setup.exe" -Force
+
+      - name: Create acceptance report and hashes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            "artifacts/RewriteDubbing_V2.0.0_Windows_x64_Setup.exe",
+            "artifacts/RewriteDubbing_V2.0.0_Windows_x64_Portable.zip",
+            "artifacts/RewriteDubbing_V2.0.0_Source.zip"
+          )
+          $lines = @(
+            "RewriteDubbing V2.0.0 Windows Acceptance",
+            "AI core baseline: Multi-AI Chat Desktop v1.9.6",
+            "Workflow: DeepSeek -> ChatGPT -> DeepSeek -> VeloVoice",
+            "Provider-session rule: current embedded chats only; no automatic new session",
+            "Raw-text relay: exact string handoff, no Markdown rendering handoff",
+            "VeloVoice: isolated sidecar, loopback/token bridge, original settings untouched",
+            "Checks completed: V2 contract tests; pipeline behavior; VeloVoice protocol; live sidecar ping; pnpm verify; Rust tests; NSIS build; silent install payload; installed app launch smoke",
+            ""
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "Missing acceptance artifact: $file" }
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            $lines += "$hash  $([IO.Path]::GetFileName($file))"
+          }
+          $lines | Set-Content "artifacts/RewriteDubbing_V2.0.0_ACCEPTANCE.txt" -Encoding UTF8
+          Get-Content "artifacts/RewriteDubbing_V2.0.0_ACCEPTANCE.txt"
+
+      - name: Upload acceptance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RewriteDubbing-V2.0.0-Windows-Acceptance
+          path: |
+            artifacts/RewriteDubbing_V2.0.0_Windows_x64_Setup.exe
+            artifacts/RewriteDubbing_V2.0.0_Windows_x64_Portable.zip
+            artifacts/RewriteDubbing_V2.0.0_Source.zip
+            artifacts/RewriteDubbing_V2.0.0_ACCEPTANCE.txt
+          if-no-files-found: error
+          retention-days: 30
