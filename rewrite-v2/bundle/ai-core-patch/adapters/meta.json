@@ -1,0 +1,46 @@
+{
+  "$schema": "./schema.json",
+  "schemaVersion": 1,
+  "adapterVersion": 100,
+  "provider": "meta",
+  "displayName": "DeepSeek",
+  "urls": {
+    "app": "https://chat.deepseek.com",
+    "login": "https://chat.deepseek.com",
+    "match": ["chat.deepseek.com/*"],
+    "ssoMatch": []
+  },
+  "inputSelectors": [
+    "textarea#chat-input",
+    "#chat-input textarea",
+    "textarea[placeholder=\"给 DeepSeek 发送消息 \"]",
+    "textarea[placeholder*=\"DeepSeek\"]",
+    "textarea"
+  ],
+  "sendButtonSelectors": [
+    "button[aria-label*=\"Send\"]",
+    "button[aria-label*=\"发送\"]",
+    "button[type=\"submit\"]"
+  ],
+  "responseSelectors": [
+    "div.ds-assistant-message-main-content",
+    ".ds-assistant-message-main-content"
+  ],
+  "loginDetectors": [
+    "textarea#chat-input",
+    "#chat-input textarea",
+    "textarea[placeholder*=\"DeepSeek\"]"
+  ],
+  "loggedOutDetectors": [],
+  "thinkingDetectors": [
+    ".ds-message-loading",
+    "span.ds-message-loading"
+  ],
+  "stopButtonSelectors": [
+    "button[aria-label*=\"Stop\"]",
+    "button[aria-label*=\"停止\"]"
+  ],
+  "inputStrategy": "default",
+  "sendStrategy": "enter",
+  "timing": { "doneDelayMs": 3500, "chunkDebounceMs": 800, "statusIntervalMs": 10000, "backupPollMs": 3000 }
+}
