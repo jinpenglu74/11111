@@ -20,29 +20,17 @@ jobs:
         with:
           ref: rewrite-dubbing-v2-build
 
-      - name: Reconstruct and unpack V2 patch bundle
+      - name: Verify and unpack V2 patch bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $parts = Get-ChildItem rewrite-v2/ci-bundle.b64.part* | Sort-Object Name
-          if ($parts.Count -lt 1) { throw "V2 patch bundle parts are missing" }
-          $zip = "$pwd\rewrite-v2\ci-bundle-rebuilt.zip"
-          $stream = [IO.File]::Open($zip, [IO.FileMode]::Create, [IO.FileAccess]::Write)
-          try {
-            foreach ($part in $parts) {
-              $encoded = (Get-Content $part.FullName -Raw) -replace "\s",""
-              $bytes = [Convert]::FromBase64String($encoded)
-              $stream.Write($bytes, 0, $bytes.Length)
-              Write-Host "decoded $($part.Name): $($bytes.Length) bytes"
-            }
-          } finally {
-            $stream.Dispose()
-          }
+          $zip = "$pwd\rewrite-v2\ci-bundle-current.zip"
+          if (-not (Test-Path $zip)) { throw "V2 patch bundle is missing" }
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          Write-Host "rebuilt bundle sha256=$hash"
+          Write-Host "bundle sha256=$hash"
           Expand-Archive $zip "$pwd\rewrite-v2\bundle" -Force
           if (-not (Test-Path "$pwd\rewrite-v2\bundle\ai-core-patch\apply_v2_core_patch.py")) {
-            throw "Rebuilt V2 bundle is incomplete"
+            throw "V2 patch bundle is incomplete"
           }
           python rewrite-v2/bundle/ai-core-patch/tests/run_v2_contract_tests.py rewrite-v2/bundle/ai-core-patch
 
