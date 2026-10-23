@@ -3,7 +3,7 @@ name: RewriteDubbing V2 Windows Acceptance
 on:
   push:
     branches:
-      - rewrite-dubbing-v2-build
+      - rewrite-dubbing-v2-acceptance
     paths:
       - 'rewrite-v2/**'
       - '.github/workflows/rewrite-dubbing-v2-build.yml'
