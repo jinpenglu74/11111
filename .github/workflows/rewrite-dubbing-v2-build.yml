@@ -19,7 +19,7 @@ jobs:
     env:
       V2_VERSION: 2.0.0
       UPSTREAM_TAG: v1.9.6
-      CI_BUNDLE_SHA256: 74d969ce6082acc6ca76015e522e6dbcd83b63d049df197f64ddcd81a6d3af93
+      CI_BUNDLE_SHA256: 5fb1912d0ba4c2109d00ef4f2c2a24da0a7100531abdb1ec88bcc46fbe61200c
 
     steps:
       - name: Checkout temporary build branch
