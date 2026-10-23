@@ -20,16 +20,22 @@ jobs:
         with:
           ref: rewrite-dubbing-v2-build
 
-      - name: Verify and unpack V2 patch bundle
+      - name: Reconstruct and verify V2 patch bundle
         shell: pwsh
         run: |
-          $zip = "$pwd\rewrite-v2\ci-bundle-current.zip"
-          if (-not (Test-Path $zip)) { throw "V2 patch bundle is missing" }
+          $parts = 1..8 | ForEach-Object { "rewrite-v2/ci-bundle-v2.b64.part$_" }
+          foreach ($p in $parts) {
+            if (-not (Test-Path $p)) { throw "Missing V2 bundle part: $p" }
+          }
+          $b64 = ($parts | ForEach-Object { Get-Content $_ -Raw }) -join ""
+          $bytes = [Convert]::FromBase64String(($b64 -replace "\\s",""))
+          $zip = "$pwd\\rewrite-v2\\ci-bundle.zip"
+          [IO.File]::WriteAllBytes($zip, $bytes)
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne "74d969ce6082acc6ca76015e522e6dbcd83b63d049df197f64ddcd81a6d3af93") {
+          if ($hash -ne "40f7ba5bbb9432a1f0248035c747cb03d23225fd2e99030325f39b37c29003c1") {
             throw "V2 patch bundle SHA256 mismatch: $hash"
           }
-          Expand-Archive $zip "$pwd\rewrite-v2\bundle" -Force
+          Expand-Archive $zip "$pwd\\rewrite-v2\\bundle" -Force
           python rewrite-v2/bundle/ai-core-patch/tests/run_v2_contract_tests.py rewrite-v2/bundle/ai-core-patch
 
       - name: Clone frozen Multi-AI Chat v1.9.6
@@ -48,6 +54,13 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/jinpenglu74/VeloVoice.git velovoice
           python rewrite-v2/bundle/patch_velovoice.py velovoice rewrite-v2/bundle
+
+      - name: Setup Java 22
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '22'
+          cache: maven
 
       - name: Restore VeloVoice JACOB 1.21 dependency
         shell: pwsh
@@ -72,13 +85,6 @@ jobs:
           if (-not $sources) { throw "SRT library Java sources missing" }
           javac -encoding UTF-8 -d "$env:RUNNER_TEMP\srt-classes" $sources
           jar --create --file velovoice/lib/srt-library.jar -C "$env:RUNNER_TEMP\srt-classes" .
-
-      - name: Setup Java 22
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '22'
-          cache: maven
 
       - name: Build VeloVoice V2 sidecar
         shell: pwsh
