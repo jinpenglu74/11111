@@ -50,7 +50,10 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/jinpenglu74/VeloVoice.git velovoice
           python rewrite-v2/bundle/patch_velovoice.py velovoice rewrite-v2/bundle
-
+          $sidecarApp = "velovoice/src/main/java/mai_onsyn/RewriteDubbingV2/velo/VeloVoiceSidecarApp.java"
+          $source = Get-Content $sidecarApp -Raw
+          $source = $source -replace '(?m)^\s*WindowManager\.initializeAutoPaneBackground\(root\);\r?\n?', ''
+          Set-Content $sidecarApp $source -Encoding UTF8
       - name: Restore VeloVoice JACOB 1.21 dependency
         shell: pwsh
         run: |
