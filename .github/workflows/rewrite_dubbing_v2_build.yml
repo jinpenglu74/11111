@@ -27,6 +27,7 @@ jobs:
           $zip = "$pwd\rewrite-v2\ci-bundle-current.zip"
           if (-not (Test-Path $zip)) { throw "V2 patch bundle is missing" }
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "34660344208df22dc6d921c4502ec22c5aab740380c9716bb1a22dc0f296074b") { throw "V2 patch bundle SHA256 mismatch: $hash" }
           Write-Host "bundle sha256=$hash"
           Expand-Archive $zip "$pwd\rewrite-v2\bundle" -Force
           if (-not (Test-Path "$pwd\rewrite-v2\bundle\ai-core-patch\apply_v2_core_patch.py")) {
