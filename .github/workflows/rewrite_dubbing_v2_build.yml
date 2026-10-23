@@ -96,14 +96,21 @@ jobs:
           Copy-Item $jar.FullName "$env:RUNNER_TEMP\RewriteDubbing-V2-VeloVoice-Sidecar.jar"
           java -cp $jar.FullName mai_onsyn.RewriteDubbingV2.velo.VeloVoiceProtocolSelfTest
 
-      - name: Build bundled Java runtime
+      - name: Build bundled Java runtime and runtime resources
         shell: pwsh
         run: |
           $modules = (java --list-modules | ForEach-Object { ($_ -split "@")[0] }) -join ","
           jlink --add-modules $modules --strip-debug --no-header-files --no-man-pages --compress=zip-6 --output upstream/v2-resources/Runtime
           New-Item -ItemType Directory -Force upstream/v2-resources/Dependencies | Out-Null
+          New-Item -ItemType Directory -Force upstream/v2-resources/Tools/VeloVoiceBridge | Out-Null
+          New-Item -ItemType Directory -Force upstream/v2-resources/Licenses | Out-Null
           Copy-Item velovoice/lib/jacob-1.21/jacob-1.21-x64.dll upstream/v2-resources/Dependencies/
-          Copy-Item "$env:RUNNER_TEMP\RewriteDubbing-V2-VeloVoice-Sidecar.jar" upstream/v2-resources/
+          Copy-Item "$env:RUNNER_TEMP\RewriteDubbing-V2-VeloVoice-Sidecar.jar" upstream/v2-resources/Tools/VeloVoiceBridge/
+          Copy-Item velovoice/LICENSE upstream/v2-resources/Licenses/VeloVoice-GPL-3.0.txt
+          Copy-Item velovoice/NOTICE upstream/v2-resources/Licenses/VeloVoice-NOTICE.txt
+          Copy-Item upstream/LICENSE upstream/v2-resources/Licenses/Multi-AI-Chat-MIT.txt
+          if (-not (Test-Path upstream/v2-resources/Runtime/bin/java.exe)) { throw "Bundled Java runtime missing java.exe" }
+          if (-not (Test-Path upstream/v2-resources/Tools/VeloVoiceBridge/RewriteDubbing-V2-VeloVoice-Sidecar.jar)) { throw "Bundled VeloVoice sidecar missing" }
 
       - name: Setup Node 24 and pnpm 11
         uses: actions/setup-node@v4
@@ -129,10 +136,40 @@ jobs:
         working-directory: upstream
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
-      - name: Create clean patched source archive
+      - name: Create complete patched source archive
         shell: pwsh
         run: |
-          python -c "import pathlib,zipfile; root=pathlib.Path('upstream'); out=pathlib.Path('RewriteDubbing_V2.0.0_Source.zip'); skip={'.git','node_modules','target','dist','Runtime'}; z=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED); [(z.write(p,p.relative_to(root)) if not any(part in skip for part in p.relative_to(root).parts) else None) for p in root.rglob('*') if p.is_file()]; z.close()"
+          New-Item -ItemType Directory -Force source-package | Out-Null
+          Copy-Item upstream source-package/Multi-AI-Chat-V2 -Recurse
+          foreach ($p in @(
+            'source-package/Multi-AI-Chat-V2/.git',
+            'source-package/Multi-AI-Chat-V2/node_modules',
+            'source-package/Multi-AI-Chat-V2/dist',
+            'source-package/Multi-AI-Chat-V2/src-tauri/target',
+            'source-package/Multi-AI-Chat-V2/v2-resources/Runtime'
+          )) { if (Test-Path $p) { Remove-Item $p -Recurse -Force } }
+          if (Test-Path source-package/Multi-AI-Chat-V2/v2-resources/Tools/VeloVoiceBridge/RewriteDubbing-V2-VeloVoice-Sidecar.jar) {
+            Remove-Item source-package/Multi-AI-Chat-V2/v2-resources/Tools/VeloVoiceBridge/RewriteDubbing-V2-VeloVoice-Sidecar.jar -Force
+          }
+
+          Copy-Item velovoice source-package/VeloVoice-Patched-Source -Recurse
+          foreach ($p in @(
+            'source-package/VeloVoice-Patched-Source/.git',
+            'source-package/VeloVoice-Patched-Source/target'
+          )) { if (Test-Path $p) { Remove-Item $p -Recurse -Force } }
+
+          Copy-Item rewrite-v2/bundle source-package/Build-Patch-And-Tests -Recurse
+          @"
+RewriteDubbing V2.0.0 complete source
+
+AI core base: TED-H-com/multi-ai-chat-desktop v1.9.6
+VeloVoice base: jinpenglu74/VeloVoice (upstream Mai-Onsyn/VeloVoice)
+Build target: Windows x64
+Workflow: DeepSeek -> ChatGPT -> DeepSeek -> VeloVoice
+The VeloVoice component is distributed under GPL-3.0; its LICENSE and patched source are included.
+"@ | Set-Content source-package/BUILD_INFO.txt -Encoding UTF8
+
+          Compress-Archive -Path source-package/* -DestinationPath RewriteDubbing_V2.0.0_Source.zip -CompressionLevel Optimal
 
       - name: Build Windows installer
         working-directory: upstream
