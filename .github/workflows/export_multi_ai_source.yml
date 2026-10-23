@@ -1,0 +1,33 @@
+name: Export Multi-AI Source
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - rewrite-dubbing-v2-source
+    paths:
+      - '.github/workflows/export_multi_ai_source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+
+      - name: Clone Multi-AI Chat v1.9.6
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch v1.9.6 https://github.com/TED-H-com/multi-ai-chat-desktop.git RewriteDubbingV2
+          Remove-Item RewriteDubbingV2/.git -Recurse -Force
+
+      - name: Upload complete source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: RewriteDubbingV2-Source-Baseline
+          path: RewriteDubbingV2
+          if-no-files-found: error
+          retention-days: 7
