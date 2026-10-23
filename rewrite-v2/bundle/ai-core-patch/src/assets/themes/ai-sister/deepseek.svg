@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="DeepSeek">
+  <rect width="128" height="128" rx="32" fill="#4d6bfe"/>
+  <path d="M30 38h31c23 0 37 10 37 26S84 90 61 90H30V38zm18 15v22h13c12 0 19-4 19-11s-7-11-19-11H48z" fill="white"/>
+  <path d="M87 38h13L83 90H70l17-52z" fill="white" opacity=".9"/>
+</svg>
