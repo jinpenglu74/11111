@@ -19,7 +19,7 @@ jobs:
     env:
       V2_VERSION: 2.0.0
       UPSTREAM_TAG: v1.9.6
-      CI_BUNDLE_SHA256: 40f7ba5bbb9432a1f0248035c747cb03d23225fd2e99030325f39b37c29003c1
+      CI_BUNDLE_SHA256: 74d969ce6082acc6ca76015e522e6dbcd83b63d049df197f64ddcd81a6d3af93
 
     steps:
       - name: Checkout temporary build branch
@@ -31,8 +31,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $bundle = 'rewrite-v2/ci-bundle.zip'
-          if (-not (Test-Path $bundle)) { throw 'ci-bundle.zip missing' }
+          $encoded = (Get-Content -Raw 'rewrite-v2/ci-bundle.b64') -replace '\\s',''
+          $bundle = 'ci-bundle.zip'
+          [IO.File]::WriteAllBytes($bundle, [Convert]::FromBase64String($encoded))
           $actual = (Get-FileHash $bundle -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $env:CI_BUNDLE_SHA256) { throw "CI bundle SHA256 mismatch: $actual" }
           Expand-Archive -LiteralPath $bundle -DestinationPath ci-bundle -Force
